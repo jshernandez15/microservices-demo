@@ -53,6 +53,9 @@ const path = require('path');
 const grpc = require('grpc');
 const pino = require('pino');
 const protoLoader = require('@grpc/proto-loader');
+const { serverInterceptorsFactory } = require("grpc-prometheus");
+const { GrpcHostBuilder } = require("grpc-host-builder");
+const { ServerCredentials } = require('@grpc/grpc-js');
 
 const MAIN_PROTO_PATH = path.join(__dirname, './proto/demo.proto');
 const HEALTH_PROTO_PATH = path.join(__dirname, './proto/grpc/health/v1/health.proto');
@@ -109,18 +112,22 @@ function _carry (amount) {
 /**
  * Lists the supported currencies
  */
-function getSupportedCurrencies (call, callback) {
+ const getSupportedCurrencies = function (call) {
   logger.info('Getting supported currencies...');
+  var content = {};
   _getCurrencyData((data) => {
-    callback(null, {currency_codes: Object.keys(data)});
+    content = {currency_codes: Object.keys(data)};
   });
+
+  return content;
 }
 
 /**
  * Converts between currencies
  */
-function convert (call, callback) {
+function convert (call) {
   logger.info('received conversion request');
+  var resultConvert = {};
   try {
     _getCurrencyData((data) => {
       const request = call.request;
@@ -145,19 +152,20 @@ function convert (call, callback) {
       result.currency_code = request.to_code;
 
       logger.info(`conversion request successful`);
-      callback(null, result);
+      resultConvert = result;
     });
   } catch (err) {
     logger.error(`conversion request failed: ${err}`);
-    callback(err.message);
+    resultConvert = {error: err.message};
   }
+  return resultConvert;
 }
 
 /**
  * Endpoint for health checks
  */
-function check (call, callback) {
-  callback(null, { status: 'SERVING' });
+const check = function (call) {
+  return { status: 'SERVING' };
 }
 
 /**
@@ -165,12 +173,19 @@ function check (call, callback) {
  * CurrencyConverter service at the sample server port
  */
 function main () {
-  logger.info(`Starting gRPC server on port ${PORT}...`);
-  const server = new grpc.Server();
-  server.addService(shopProto.CurrencyService.service, {getSupportedCurrencies, convert});
-  server.addService(healthProto.Health.service, {check});
-  server.bind(`0.0.0.0:${PORT}`, grpc.ServerCredentials.createInsecure());
-  server.start();
+  logger.info(`Starting gRPC server on port ${PORT}...`); 
+
+  const server = new GrpcHostBuilder()
+    .addInterceptor(
+      serverInterceptorsFactory({
+        timeBuckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 10]
+      })
+    )
+    .addService(shopProto.CurrencyService.service, {getSupportedCurrencies, convert})
+    .addService(healthProto.Health.service, { check })
+    .bind(`0.0.0.0:${PORT}`, ServerCredentials.createInsecure())
+    .buildAsync();
+
 }
 
 main();

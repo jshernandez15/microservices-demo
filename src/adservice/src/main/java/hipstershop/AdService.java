@@ -24,6 +24,7 @@ import hipstershop.Demo.AdRequest;
 import hipstershop.Demo.AdResponse;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
+import io.grpc.ServerInterceptors;
 import io.grpc.StatusRuntimeException;
 import io.grpc.health.v1.HealthCheckResponse.ServingStatus;
 import io.grpc.services.*;
@@ -46,6 +47,9 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Random;
 import java.util.concurrent.TimeUnit;
+
+import me.dinowernli.grpc.prometheus.Configuration;
+import me.dinowernli.grpc.prometheus.MonitoringServerInterceptor;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -67,10 +71,17 @@ public final class AdService {
     int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "9555"));
     healthMgr = new HealthStatusManager();
 
+    MonitoringServerInterceptor monitoringInterceptor =
+            MonitoringServerInterceptor.create(Configuration.cheapMetricsOnly());
+
     server =
         ServerBuilder.forPort(port)
-            .addService(new AdServiceImpl())
-            .addService(healthMgr.getHealthService())
+            .addService(ServerInterceptors.intercept(
+                    new AdServiceImpl(), monitoringInterceptor
+            ))
+            .addService(ServerInterceptors.intercept(
+                    healthMgr.getHealthService(), monitoringInterceptor
+            ))
             .build()
             .start();
     logger.info("Ad Service started, listening on " + port);
