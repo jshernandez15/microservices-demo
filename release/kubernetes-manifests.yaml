@@ -505,6 +505,10 @@ spec:
     metadata:
       labels:
         app: currencyservice
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "7000"
     spec:
       serviceAccountName: default
       terminationGracePeriodSeconds: 5
