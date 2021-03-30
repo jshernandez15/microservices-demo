@@ -510,7 +510,7 @@ spec:
       terminationGracePeriodSeconds: 5
       containers:
       - name: server
-        image: gcr.io/google-samples/microservices-demo/currencyservice:v0.2.2
+        image: docker.io/jnhernandz/currencyservice:latest
         ports:
         - name: grpc
           containerPort: 7000
@@ -678,7 +678,7 @@ spec:
       terminationGracePeriodSeconds: 5
       containers:
       - name: server
-        image: gcr.io/google-samples/microservices-demo/adservice:v0.2.2
+        image: docker.io/jnhernandz/adservice:latest
         ports:
         - containerPort: 9555
         env:
