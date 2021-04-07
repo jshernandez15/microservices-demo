@@ -215,11 +215,14 @@ spec:
         app: frontend
       annotations:
         sidecar.istio.io/rewriteAppHTTPProbers: "true"
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "8080"
     spec:
       serviceAccountName: default
       containers:
         - name: server
-          image: gcr.io/google-samples/microservices-demo/frontend:v0.2.2
+          image: docker.io/jnhernandz/frontend:latest
           ports:
           - containerPort: 8080
           readinessProbe:

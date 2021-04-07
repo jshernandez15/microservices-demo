@@ -27,6 +27,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opencensus.io/plugin/ocgrpc"
 	"go.opencensus.io/plugin/ochttp"
 	"go.opencensus.io/plugin/ochttp/propagation/b3"
@@ -142,6 +143,7 @@ func main() {
 	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./static/"))))
 	r.HandleFunc("/robots.txt", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "User-agent: *\nDisallow: /") })
 	r.HandleFunc("/_healthz", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "ok") })
+	r.Path("/metrics").Handler(promhttp.Handler())
 
 	var handler http.Handler = r
 	handler = &logHandler{log: log, next: handler} // add logging
