@@ -26,8 +26,9 @@ import (
 	"contrib.go.opencensus.io/exporter/stackdriver"
 	"github.com/gorilla/mux"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/sirupsen/logrus"
 	"go.opencensus.io/plugin/ocgrpc"
 	"go.opencensus.io/plugin/ochttp"
 	"go.opencensus.io/plugin/ochttp/propagation/b3"
@@ -131,15 +132,69 @@ func main() {
 	mustConnGRPC(ctx, &svc.checkoutSvcConn, svc.checkoutSvcAddr)
 	mustConnGRPC(ctx, &svc.adSvcConn, svc.adSvcAddr)
 
+	// taken from https://pkg.go.dev/github.com/prometheus/client_golang/prometheus/promhttp#example-InstrumentHandlerDuration
+
+	inFlightGauge := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "frontend_in_flight_requests",
+		Help: "A gauge of requests currently being served by the frontend.",
+	})
+
+	counter := prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "frontend_api_requests_total",
+			Help: "A counter for requests to the frontend.",
+		},
+		[]string{"code", "method"},
+	)
+
+	// duration is partitioned by the HTTP method and handler. It uses custom
+	// buckets based on the expected request duration.
+	duration := prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "frontend_request_duration_seconds",
+			Help:    "A histogram of latencies for requests in the frontend.",
+			Buckets: []float64{.25, .5, 1, 2.5, 5, 10},
+		},
+		[]string{"handler", "method"},
+	)
+
+	// responseSize has no labels, making it a zero-dimensional
+	// ObserverVec.
+	responseSize := prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "frontend_response_size_bytes",
+			Help:    "A histogram of response sizes for requests.",
+			Buckets: []float64{200, 500, 900, 1500},
+		},
+		[]string{},
+	)
+
+	prometheus.MustRegister(inFlightGauge, counter, duration, responseSize)
+
+	// Instrument the handlers with all the metrics, injecting the "handler"
+	// label by currying.
+	chain := func(name string, f func(http.ResponseWriter, *http.Request)) http.Handler {
+		return promhttp.InstrumentHandlerInFlight(
+			inFlightGauge,
+			promhttp.InstrumentHandlerDuration(duration.MustCurryWith(prometheus.Labels{"handler": name}),
+				promhttp.InstrumentHandlerCounter(counter,
+					promhttp.InstrumentHandlerResponseSize(responseSize,
+						http.HandlerFunc(f),
+					),
+				),
+			),
+		)
+	}
+
 	r := mux.NewRouter()
-	r.HandleFunc("/", svc.homeHandler).Methods(http.MethodGet, http.MethodHead)
-	r.HandleFunc("/product/{id}", svc.productHandler).Methods(http.MethodGet, http.MethodHead)
-	r.HandleFunc("/cart", svc.viewCartHandler).Methods(http.MethodGet, http.MethodHead)
-	r.HandleFunc("/cart", svc.addToCartHandler).Methods(http.MethodPost)
-	r.HandleFunc("/cart/empty", svc.emptyCartHandler).Methods(http.MethodPost)
-	r.HandleFunc("/setCurrency", svc.setCurrencyHandler).Methods(http.MethodPost)
-	r.HandleFunc("/logout", svc.logoutHandler).Methods(http.MethodGet)
-	r.HandleFunc("/cart/checkout", svc.placeOrderHandler).Methods(http.MethodPost)
+	r.Handle("/", chain("home", svc.homeHandler)).Methods(http.MethodGet, http.MethodHead)
+	r.Handle("/product/{id}", chain("product-by-id", svc.productHandler)).Methods(http.MethodGet, http.MethodHead)
+	r.Handle("/cart", chain("get-cart", svc.viewCartHandler)).Methods(http.MethodGet, http.MethodHead)
+	r.Handle("/cart", chain("post-cart", svc.addToCartHandler)).Methods(http.MethodPost)
+	r.Handle("/cart/empty", chain("empty-cart", svc.emptyCartHandler)).Methods(http.MethodPost)
+	r.Handle("/setCurrency", chain("set-currency", svc.setCurrencyHandler)).Methods(http.MethodPost)
+	r.Handle("/logout", chain("logout", svc.logoutHandler)).Methods(http.MethodGet)
+	r.Handle("/cart/checkout", chain("checkout", svc.placeOrderHandler)).Methods(http.MethodPost)
 	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./static/"))))
 	r.HandleFunc("/robots.txt", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "User-agent: *\nDisallow: /") })
 	r.HandleFunc("/_healthz", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "ok") })
@@ -169,7 +224,7 @@ func initJaegerTracing(log logrus.FieldLogger) {
 	exporter, err := jaeger.NewExporter(jaeger.Options{
 		Endpoint: fmt.Sprintf("http://%s", svcAddr),
 		Process: jaeger.Process{
-			ServiceName: "frontend",
+			ServiceName: "frontend_frontend",
 		},
 	})
 	if err != nil {
